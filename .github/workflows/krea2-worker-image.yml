@@ -8,7 +8,8 @@ name: Krea2 worker image
 # руками (workflow_dispatch — когда файл уже в main). Ничего не выкатывает: шаблон
 # RunPod на новый адрес переключается отдельно, руками.
 #
-# ❗️Пакет должен быть ПУБЛИЧНЫМ (в образе только открытый код и публичные веса MediaPipe;
+# ❗️Пакет должен быть ПУБЛИЧНЫМ (в образе только открытый код, публичные веса MediaPipe и
+# публичные LoRA проб лиц с HF, выкат 4 — их список секретом FACE_LORAS, не в репо;
 # модели владельца — из кэша моделей RunPod на старте). Видимость пакета GitHub меняет
 # только в интерфейсе: Packages → nastia-krea2-worker → Package settings → Change
 # visibility → Public.
@@ -58,8 +59,11 @@ jobs:
 
       - name: Build
         working-directory: infra/runpod/krea2
+        env:
+          FACE_LORAS: ${{ secrets.FACE_LORAS }}
         run: |
-          docker build --progress=plain \
+          [ -n "$FACE_LORAS" ] || { echo "нет секрета FACE_LORAS (список LoRA проб лиц)"; exit 1; }
+          DOCKER_BUILDKIT=1 docker build --progress=plain --secret id=face_loras,env=FACE_LORAS \
             --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
             -t "$IMAGE:${{ github.sha }}" .
