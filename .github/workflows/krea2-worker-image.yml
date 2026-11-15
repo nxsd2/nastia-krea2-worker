@@ -1,0 +1,76 @@
+name: Krea2 worker image
+
+# Образ фото-воркера Krea 2 RunPod (infra/runpod/krea2/Dockerfile) → GHCR
+# ghcr.io/nxsd2/nastia-krea2-worker:<sha коммита> (+ :<ветка>).
+# Полигон фото, съёмка владельца и «боевой как полигон» (выкат 2 «персонаж целиком»):
+# ComfyUI v0.43 и узлы полигона — в образе, а не на холодном старте.
+# Запуск: пуш, который меняет infra/runpod/krea2/** или этот файл (любая ветка), либо
+# руками (workflow_dispatch — когда файл уже в main). Ничего не выкатывает: шаблон
+# RunPod на новый адрес переключается отдельно, руками.
+#
+# ❗️Пакет должен быть ПУБЛИЧНЫМ (в образе только открытый код и публичные веса MediaPipe;
+# модели владельца — из кэша моделей RunPod на старте). Видимость пакета GitHub меняет
+# только в интерфейсе: Packages → nastia-krea2-worker → Package settings → Change
+# visibility → Public.
+on:
+  push:
+    paths:
+      - "infra/runpod/krea2/**"
+      - ".github/workflows/krea2-worker-image.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: krea2-worker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/nxsd2/nastia-krea2-worker
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      # Базовый образ — 14,3 ГБ в сжатом виде: на стоковом раннере места нет. Убираем
+      # предустановленное (Android SDK, .NET, Haskell, CodeQL…) и кладём данные Docker на /mnt.
+      - name: Free disk space
+        run: |
+          df -h / /mnt
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/share/powershell \
+            /usr/share/swift /opt/hostedtoolcache/go /opt/hostedtoolcache/Python || true
+          sudo docker image prune --all --force || true
+          sudo systemctl stop docker docker.socket
+          sudo mkdir -p /mnt/docker
+          echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          docker info --format 'docker root: {{.DockerRootDir}}'
+          df -h / /mnt
+
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u nxsd2 --password-stdin
+
+      - name: Build
+        working-directory: infra/runpod/krea2
+        run: |
+          docker build --progress=plain \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t "$IMAGE:${{ github.sha }}" .
+          df -h /mnt
+
+      - name: Push
+        run: |
+          branch="${GITHUB_REF_NAME//[^a-zA-Z0-9_.-]/-}"
+          docker tag "$IMAGE:${{ github.sha }}" "$IMAGE:$branch"
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:$branch"
+          echo "### Образ" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$IMAGE:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          docker inspect --format '{{.Id}} {{.Size}}' "$IMAGE:${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
