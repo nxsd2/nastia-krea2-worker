@@ -75,11 +75,12 @@ RUN set -eux; \
 
 # LoRA проб лиц: строка списка — репо, ревизия, файл, sha256. Список — секрет сборки
 # (в слой образа не попадает), без `set -x` и с `wget -q`: имена (содержимое владельца)
-# в журнал сборки не попадают — только номер и итог. Число — в /nastia/face_loras.count
+# в журнал сборки не попадают — только номер и итог. Последняя строка без перевода строки
+# (секрет GitHub его обрезает) тоже читается; скачано должно быть ровно столько, сколько строк. Число — в /nastia/face_loras.count
 # для build_check.
 RUN --mount=type=secret,id=face_loras,required=true set -euo pipefail; \
     d=/comfyui/models/loras/identity; mkdir -p "$d"; n=0; \
-    while read -r repo rev file sha; do \
+    while read -r repo rev file sha || [ -n "$repo" ]; do \
       case "$repo" in ''|'#'*) continue ;; esac; \
       n=$((n + 1)); \
       wget -q -O "$d/$file" "https://huggingface.co/$repo/resolve/$rev/$file" \
@@ -87,6 +88,8 @@ RUN --mount=type=secret,id=face_loras,required=true set -euo pipefail; \
       echo "$sha  $d/$file" | sha256sum -c --status \
         || { echo "LoRA проб $n: sha256 не сошёлся"; exit 1; }; \
     done < /run/secrets/face_loras; \
+    want=$(awk '!/^#/ && NF {c++} END {print c+0}' /run/secrets/face_loras); \
+    [ "$n" -ge 1 ] && [ "$n" -eq "$want" ] || { echo "LoRA проб: скачано $n из $want строк списка"; exit 1; }; \
     mkdir -p /nastia; echo "$n" > /nastia/face_loras.count; \
     echo "LoRA проб лиц в образе: $n"
 
